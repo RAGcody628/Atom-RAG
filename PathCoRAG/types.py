@@ -9,6 +9,13 @@ class GPTKeywordExtractionFormat(BaseModel):
 class GPTQueryExtensionFormat(BaseModel):
     extended_queries: List[str]
     
+class GEMINIKeywordExtractionFormat(BaseModel):
+    high_level_keywords: List[str]
+    low_level_keywords: List[str]
+
+class GEMINIQueryExtensionFormat(BaseModel):
+    extended_queries: List[str]
+    
 class KnowledgeGraphNode(BaseModel):
     id: str
     labels: list[str]

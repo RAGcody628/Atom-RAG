@@ -2,23 +2,26 @@ import os
 import json
 import time
 
-from PathCoRAG import PathCoRAG
+from PathCoRAG import PathCoRAG, QueryParam
 from PathCoRAG.llm.openai import gpt_4o_mini_complete, openai_embed
-from PathCoRAG.llm.ollama import ollama_model_complete, ollama_embed
-from PathCoRAG.utils import EmbeddingFunc
-
 
 def insert_text(rag, file_path):
-    # with open(file_path, mode="r") as f:
-    #     unique_contexts = json.load(f)
+    _, file_extension = os.path.splitext(file_path)
+    if file_extension == '.txt':
+        pass
+    else:
+        with open(file_path, mode="r") as f:
+            unique_contexts = json.load(f)
 
     retries = 0
     max_retries = 3
     while retries < max_retries:
         try:
-            # rag.insert(unique_contexts)
-            with open(file_path, "r", encoding="utf-8") as f:
-                rag.insert(f.read())
+            if file_extension == '.txt': 
+                with open(file_path, "r", encoding="utf-8") as f:
+                    rag.insert(f.read(), param = construction_param)
+            else:
+                rag.insert(unique_contexts, param = construction_param)
             break
         except Exception as e:
             retries += 1
@@ -28,7 +31,9 @@ def insert_text(rag, file_path):
         print("Insertion failed after exceeding the maximum number of retries")
 
 
-cls = "podcast"
+cls = "test"
+mode = "ours_experiment2" # experiment1: doc->chunk->atomic / experiment2: doc->chunk->atomic->triple
+construction_param = QueryParam(Mode = mode)
 WORKING_DIR = f"../{cls}"
 
 if not os.path.exists(WORKING_DIR):
@@ -38,8 +43,9 @@ rag = PathCoRAG(
     working_dir=WORKING_DIR,
     embedding_func=openai_embed,
     llm_model_func=gpt_4o_mini_complete,
-    # llm_model_func=gpt_4o_complete
 )
 
-# insert_text(rag, f"../datasets/unique_contexts/{cls}_unique_contexts.json")
-insert_text(rag, f"../datasets/{cls}_transcript.txt")
+if cls == "hotpot" or cls == "multihoprag" or cls == "musique" or cls == "2wikimultihopqa" or cls == "test" or cls == "triviaqa" or cls == "nq":
+    insert_text(rag, f"../datasets/unique_contexts/{cls}_unique_contexts.txt")
+else:
+    insert_text(rag, f"../datasets/unique_contexts/{cls}_unique_contexts.json")

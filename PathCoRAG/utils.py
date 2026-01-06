@@ -192,6 +192,85 @@ def pack_user_ass_to_openai_messages(*args: str):
         {"role": roles[i % 2], "content": content} for i, content in enumerate(args)
     ]
 
+def parse_atomic_record(record: str, tuple_delimiter: str):
+    """
+    Parses a record in the format:
+    ("source" | "relation" | "target")
+
+    Returns:
+        (source, relation, target) if parsing is successful
+        None if format is invalid
+    """
+    record = record.strip()
+    
+    if not (record.startswith("(") and record.endswith(")")):
+        return None
+    
+    record = record[1:-1]  # remove outer parentheses
+    
+    # split by delimiter
+    parts = [x.strip().strip('"') for x in record.split(tuple_delimiter)]
+
+    if len(parts) < 3:
+        print(f"Skipping record (too few parts): {record}")
+        return None
+    
+    # 나머지는 target에 합치기
+    source = parts[0]
+    relation = parts[1]
+    target = tuple_delimiter.join(parts[2:]).strip('"')
+    
+    return source, relation, target
+
+def parse_atomic_record_experiment1(record: str, tuple_delimiter: str = None):
+    record = record.strip()
+
+    # {completion_delimiter}는 무시
+    if record.endswith("{completion_delimiter}"):
+        return None
+
+    # 괄호 안쪽만 추출
+    if record.startswith("(") and record.endswith(")"):
+        inner = record[1:-1].strip()  # 괄호 제거
+        # 양쪽 따옴표 제거
+        return inner.strip('"')
+    
+    return None
+
+def parse_triple_record_experiment2(record: str, tuple_delimiter: str):
+    record = record.strip()
+    if not record:
+        return None
+
+    # 괄호 안 내용만 추출
+    if record.startswith("(") and record.endswith(")"):
+        content = record[1:-1].strip().strip('"').strip("'")
+        if content:
+            return content
+    return None
+    
+def parse_triple_record(record: str, tuple_delimiter: str):
+    record = record.strip()
+    
+    if not (record.startswith("(") and record.endswith(")")):
+        return None
+    
+    record = record[1:-1]
+
+    parts = [x.strip().strip('"') for x in record.split(tuple_delimiter)]
+
+    if len(parts) != 4 or any(p == "" for p in parts):
+        logger.warning(f"Skipping malformed record (expected 4 parts, got {len(parts)}): {record}")
+        return None
+    
+    atomic_fact = parts[0]
+    triple_source = parts[1]
+    triple_relation = parts[2]
+    triple_target = tuple_delimiter.join(parts[3:]).strip('"')
+    
+    return atomic_fact, triple_source, triple_relation, triple_target
+
+
 
 def split_string_by_multi_markers(content: str, markers: list[str]) -> list[str]:
     """Split a string by multiple markers"""

@@ -138,6 +138,9 @@ async def ollama_model_complete(
     keyword_extraction = kwargs.pop("keyword_extraction", None)
     if keyword_extraction:
         kwargs["format"] = "json"
+    query_extension = kwargs.pop("query_extension", None)
+    if query_extension:
+        kwargs["format"] = "json"
     model_name = kwargs["hashing_kv"].global_config["llm_model_name"]
     return await ollama_model_if_cache(
         model_name,

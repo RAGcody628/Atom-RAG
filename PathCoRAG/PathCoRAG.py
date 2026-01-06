@@ -19,11 +19,17 @@ from .namespace import NameSpace, make_namespace
 from .operate import (
     chunking_by_token_size,
     extract_entities,
+    extract_entities_experiment1,
+    extract_entities_experiment2,
     extract_keywords_only,
     kg_query,
     kg_query_with_keywords,
     mix_kg_vector_query,
     ours_kg_query,
+    ours_kg_query_experiment0,
+    ours_kg_query_experiment1,
+    ours_kg_query_experiment2,
+    ours_kg_query_experiment3,
     naive_query,
 )
 from .prompt import GRAPH_FIELD_SEP
@@ -316,15 +322,33 @@ class PathCoRAG:
             ),
             embedding_func=self.embedding_func,
         )
+        self.text_triples: BaseKVStorage = self.key_string_value_json_storage_cls(
+            namespace=make_namespace(
+                self.namespace_prefix, NameSpace.KV_STORE_TEXT_TRIPLES
+            ),
+            embedding_func=self.embedding_func,
+        )
+        self.text_atomics: BaseKVStorage = self.key_string_value_json_storage_cls(
+            namespace=make_namespace(
+                self.namespace_prefix, NameSpace.KV_STORE_TEXT_ATOMICS
+            ),
+            embedding_func=self.embedding_func,
+        )
         self.text_chunks: BaseKVStorage = self.key_string_value_json_storage_cls(
             namespace=make_namespace(
                 self.namespace_prefix, NameSpace.KV_STORE_TEXT_CHUNKS
             ),
             embedding_func=self.embedding_func,
         )
-        self.chunk_entity_relation_graph: BaseGraphStorage = self.graph_storage_cls(
+        self.atomic_entity_relation_graph: BaseGraphStorage = self.graph_storage_cls(
             namespace=make_namespace(
-                self.namespace_prefix, NameSpace.GRAPH_STORE_CHUNK_ENTITY_RELATION
+                self.namespace_prefix, NameSpace.GRAPH_STORE_atomic_ENTITY_RELATION
+            ),
+            embedding_func=self.embedding_func,
+        )
+        self.triple_entity_relation_graph: BaseGraphStorage = self.graph_storage_cls(
+            namespace=make_namespace(
+                self.namespace_prefix, NameSpace.GRAPH_STORE_triple_ENTITY_RELATION
             ),
             embedding_func=self.embedding_func,
         )
@@ -332,16 +356,30 @@ class PathCoRAG:
         # add embedding func by walter over
         ####
 
-        self.entities_vdb = self.vector_db_storage_cls(
+        self.atomic_entities_vdb = self.vector_db_storage_cls(
             namespace=make_namespace(
-                self.namespace_prefix, NameSpace.VECTOR_STORE_ENTITIES
+                self.namespace_prefix, NameSpace.atomic_VECTOR_STORE_ENTITIES
             ),
             embedding_func=self.embedding_func,
             meta_fields={"entity_name"},
         )
-        self.relationships_vdb = self.vector_db_storage_cls(
+        self.atomic_relationships_vdb = self.vector_db_storage_cls(
             namespace=make_namespace(
-                self.namespace_prefix, NameSpace.VECTOR_STORE_RELATIONSHIPS
+                self.namespace_prefix, NameSpace.atomic_VECTOR_STORE_RELATIONSHIPS
+            ),
+            embedding_func=self.embedding_func,
+            meta_fields={"src_id", "tgt_id"},
+        )
+        self.triple_entities_vdb = self.vector_db_storage_cls(
+            namespace=make_namespace(
+                self.namespace_prefix, NameSpace.triple_VECTOR_STORE_ENTITIES
+            ),
+            embedding_func=self.embedding_func,
+            meta_fields={"entity_name"},
+        )
+        self.triple_relationships_vdb = self.vector_db_storage_cls(
+            namespace=make_namespace(
+                self.namespace_prefix, NameSpace.triple_VECTOR_STORE_RELATIONSHIPS
             ),
             embedding_func=self.embedding_func,
             meta_fields={"src_id", "tgt_id"},
@@ -403,14 +441,16 @@ class PathCoRAG:
             self.doc_status,
             self.full_docs,
             self.text_chunks,
-            self.llm_response_cache,
+            # self.llm_response_cache,
             self.key_string_value_json_storage_cls,
             self.chunks_vdb,
-            self.relationships_vdb,
-            self.entities_vdb,
+            self.atomic_relationships_vdb,
+            self.atomic_entities_vdb,
+            self.triple_relationships_vdb,
+            self.triple_entities_vdb,
             self.graph_storage_cls,
             self.chunk_entity_relation_graph,
-            self.llm_response_cache,
+            # self.llm_response_cache,
         ]:
             # set client
             storage.db = db_client
@@ -420,19 +460,11 @@ class PathCoRAG:
         string_or_strings: Union[str, list[str]],
         split_by_character: str | None = None,
         split_by_character_only: bool = False,
+        param: QueryParam = QueryParam(),
     ):
-        """Sync Insert documents with checkpoint support
-
-        Args:
-            string_or_strings: Single document string or list of document strings
-            split_by_character: if split_by_character is not None, split the string by character, if chunk longer than
-            chunk_size, split the sub chunk by token size.
-            split_by_character_only: if split_by_character_only is True, split the string by character only, when
-            split_by_character is None, this parameter is ignored.
-        """
         loop = always_get_an_event_loop()
         return loop.run_until_complete(
-            self.ainsert(string_or_strings, split_by_character, split_by_character_only)
+            self.ainsert(string_or_strings, split_by_character, split_by_character_only, param)
         )
 
     async def ainsert(
@@ -440,19 +472,11 @@ class PathCoRAG:
         string_or_strings: Union[str, list[str]],
         split_by_character: str | None = None,
         split_by_character_only: bool = False,
+        param: QueryParam = QueryParam()
     ):
-        """Async Insert documents with checkpoint support
-
-        Args:
-            string_or_strings: Single document string or list of document strings
-            split_by_character: if split_by_character is not None, split the string by character, if chunk longer than
-            chunk_size, split the sub chunk by token size.
-            split_by_character_only: if split_by_character_only is True, split the string by character only, when
-            split_by_character is None, this parameter is ignored.
-        """
         await self.apipeline_enqueue_documents(string_or_strings)
         await self.apipeline_process_enqueue_documents(
-            split_by_character, split_by_character_only
+            split_by_character, split_by_character_only, param
         )
 
     def insert_custom_chunks(self, full_text: str, text_chunks: list[str]):
@@ -508,14 +532,6 @@ class PathCoRAG:
                 await self._insert_done()
 
     async def apipeline_enqueue_documents(self, string_or_strings: str | list[str]):
-        """
-        Pipeline for Processing Documents
-
-        1. Remove duplicate contents from the list
-        2. Generate document IDs and initial status
-        3. Filter out already processed documents
-        4. Enqueue document in status
-        """
         if isinstance(string_or_strings, str):
             string_or_strings = [string_or_strings]
 
@@ -555,17 +571,8 @@ class PathCoRAG:
         self,
         split_by_character: str | None = None,
         split_by_character_only: bool = False,
+        param: QueryParam = QueryParam()
     ) -> None:
-        """
-        Process pending documents by splitting them into chunks, processing
-        each chunk for entity and relation extraction, and updating the
-        document status.
-
-        1. Get all pending, failed, and abnormally terminated processing documents.
-        2. Split document content into chunks
-        3. Process each chunk for entity and relation extraction
-        4. Update the document status
-        """
         # 1. Get all pending, failed, and abnormally terminated processing documents.
         to_process_docs: dict[str, DocProcessingStatus] = {}
 
@@ -581,7 +588,7 @@ class PathCoRAG:
             return
 
         # 2. split docs into chunks, insert chunks, update doc status
-        batch_size = self.addon_params.get("insert_batch_size", 10)
+        batch_size = self.addon_params.get("insert_batch_size", 5)
         docs_batches = [
             list(to_process_docs.items())[i : i + batch_size]
             for i in range(0, len(to_process_docs), batch_size)
@@ -608,8 +615,14 @@ class PathCoRAG:
                         }
                     }
                 )
+                # chunks를 batch로 나누는 함수
+                def split_dict_into_batches(d: dict, batch_size: int):
+                    items = list(d.items())
+                    for i in range(0, len(items), batch_size):
+                        yield dict(items[i:i+batch_size])
+                
                 # Generate chunks from document
-                chunks: dict[str, Any] = {
+                full_chunks: dict[str, Any] = {
                     compute_mdhash_id(dp["content"], prefix="chunk-"): {
                         **dp,
                         "full_doc_id": doc_id,
@@ -623,21 +636,40 @@ class PathCoRAG:
                         self.tiktoken_model_name,
                     )
                 }
+                
+                if param.Mode == "ours_experiment1":
+                    # full_docs는 문서 단위로 한 번만 저장
+                    await self.full_docs.upsert({doc_id: {"content": status_doc.content}})
 
-                # Process document (text chunks and full docs) in parallel
-                tasks = [
-                    self.chunks_vdb.upsert(chunks),
-                    self._process_entity_relation_graph(chunks),
-                    self.full_docs.upsert({doc_id: {"content": status_doc.content}}),
-                    self.text_chunks.upsert(chunks),
-                ]
-                try:
-                    await asyncio.gather(*tasks)
+                    batch_size = 5
+                    for batch_idx, chunks in enumerate(split_dict_into_batches(full_chunks, batch_size)):
+                        processed_so_far = (batch_idx * batch_size) + len(chunks)
+                        logger.info(
+                            f"[INFO] Processing batch {batch_idx+1} with {len(chunks)} chunks "
+                            f"({processed_so_far}/{len(full_chunks)})"
+                        )
+                        
+                        tasks = [
+                            self.chunks_vdb.upsert(chunks),
+                            self._process_entity_relation_graph_experiment1(chunks),
+                            self.text_chunks.upsert(chunks)
+                        ]
+                        try:
+                            await asyncio.gather(*tasks)
+                            logger.info(
+                                f"Completed batch {batch_idx+1} → "
+                                f"{processed_so_far}/{len(full_chunks)} chunks processed"
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to process batch {batch_idx+1} of doc {doc_id}: {str(e)}")
+                            continue
+
+                    # 모든 batch 끝난 뒤 status 업데이트
                     await self.doc_status.update_doc_status(
                         {
                             doc_status_id: {
                                 "status": DocStatus.PROCESSED,
-                                "chunks_count": len(chunks),
+                                "chunks_count": len(full_chunks),   # 전체 chunk 수
                                 "content": status_doc.content,
                                 "content_summary": status_doc.content_summary,
                                 "content_length": status_doc.content_length,
@@ -647,43 +679,163 @@ class PathCoRAG:
                         }
                     )
                     await self._insert_done()
+                elif param.Mode == "ours_experiment2":
+                    # full_docs는 문서 단위로 한 번만 저장
+                    await self.full_docs.upsert({doc_id: {"content": status_doc.content}})
 
-                except Exception as e:
-                    logger.error(f"Failed to process document {doc_id}: {str(e)}")
-                    await self.doc_status.update_doc_status(
-                        {
-                            doc_status_id: {
-                                "status": DocStatus.FAILED,
-                                "error": str(e),
-                                "content": status_doc.content,
-                                "content_summary": status_doc.content_summary,
-                                "content_length": status_doc.content_length,
-                                "created_at": status_doc.created_at,
-                                "updated_at": datetime.now().isoformat(),
-                            }
-                        }
-                    )
-                    continue
-            logger.info(f"Completed batch {batch_idx + 1} of {len(docs_batches)}.")
+                    batch_size = 5
+                    for batch_idx, chunks in enumerate(split_dict_into_batches(full_chunks, batch_size)):
+                        processed_so_far = (batch_idx * batch_size) + len(chunks)
+                        logger.info(
+                            f"[INFO] Processing batch {batch_idx+1} with {len(chunks)} chunks "
+                            f"({processed_so_far}/{len(full_chunks)})"
+                        )
+
+                        tasks = [
+                            self.text_chunks.upsert(chunks),
+                            self.chunks_vdb.upsert(chunks),
+                            self._process_entity_relation_graph_experiment2(chunks),
+                        ]
+                        try:
+                            await asyncio.gather(*tasks)
+                            await self.doc_status.update_doc_status(
+                                {
+                                    doc_status_id: {
+                                        "status": DocStatus.PROCESSED,
+                                        "chunks_count": len(full_chunks),   # 전체 chunk 수
+                                        "content": status_doc.content,
+                                        "content_summary": status_doc.content_summary,
+                                        "content_length": status_doc.content_length,
+                                        "created_at": status_doc.created_at,
+                                        "updated_at": datetime.now().isoformat(),
+                                    }
+                                }
+                            )
+                            await self._insert_done_2()
+                
+                        except Exception as e:
+                            logger.error(f"Failed to process batch {batch_idx+1} of doc {doc_id}: {str(e)}")
+                            await self.doc_status.update_doc_status(
+                                {
+                                    doc_status_id: {
+                                        "status": DocStatus.FAILED,
+                                        "error": str(e),
+                                        "content": status_doc.content,
+                                        "content_summary": status_doc.content_summary,
+                                        "content_length": status_doc.content_length,
+                                        "created_at": status_doc.created_at,
+                                        "updated_at": datetime.now().isoformat(),
+                                    }
+                                }
+                            )
+                            continue
+                    
+                    logger.info(f"Completed batch {batch_idx+1} → "f"{processed_so_far}/{len(full_chunks)} chunks processed")
+                else:
+                    # full_docs는 문서 단위로 한 번만 저장
+                    await self.full_docs.upsert({doc_id: {"content": status_doc.content}})
+
+                    batch_size = 5
+                    for batch_idx, chunks in enumerate(split_dict_into_batches(full_chunks, batch_size)):
+                        processed_so_far = (batch_idx * batch_size) + len(chunks)
+                        logger.info(
+                            f"[INFO] Processing batch {batch_idx+1} with {len(chunks)} chunks "
+                            f"({processed_so_far}/{len(full_chunks)})"
+                        )
+
+                        tasks = [
+                            self.chunks_vdb.upsert(chunks),
+                            self._process_entity_relation_graph(chunks),
+                            self.text_chunks.upsert(chunks),
+                        ]
+                        try:
+                            await asyncio.gather(*tasks)
+                            # 모든 batch 끝난 뒤 status 업데이트
+                            await self.doc_status.update_doc_status(
+                                {
+                                    doc_status_id: {
+                                        "status": DocStatus.PROCESSED,
+                                        "chunks_count": len(full_chunks),   # 전체 chunk 수
+                                        "content": status_doc.content,
+                                        "content_summary": status_doc.content_summary,
+                                        "content_length": status_doc.content_length,
+                                        "created_at": status_doc.created_at,
+                                        "updated_at": datetime.now().isoformat(),
+                                    }
+                                }
+                            )
+                            await self._insert_done()
+                            logger.info(
+                                f"Completed batch {batch_idx+1} → "
+                                f"{processed_so_far}/{len(full_chunks)} chunks processed"
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to process batch {batch_idx+1} of doc {doc_id}: {str(e)}")
+                            continue
 
     async def _process_entity_relation_graph(self, chunk: dict[str, Any]) -> None:
         try:
-            new_kg = await extract_entities(
+            atomic_new_kg, triple_new_kg = await extract_entities_experiment1(
                 chunk,
-                knowledge_graph_inst=self.chunk_entity_relation_graph,
-                entity_vdb=self.entities_vdb,
-                relationships_vdb=self.relationships_vdb,
-                llm_response_cache=self.llm_response_cache,
+                atomic_knowledge_graph_inst=self.atomic_entity_relation_graph,
+                atomic_entity_vdb=self.atomic_entities_vdb,
+                atomic_relationships_vdb=self.atomic_relationships_vdb,
+                triple_knowledge_graph_inst=self.triple_entity_relation_graph,
+                triple_entity_vdb=self.triple_entities_vdb,
+                triple_relationships_vdb=self.triple_relationships_vdb,
+                # llm_response_cache=self.llm_response_cache,
                 global_config=asdict(self),
             )
-            if new_kg is None:
-                logger.info("No new entities or relationships extracted.")
+            if atomic_new_kg is None:
+                logger.info("atomic No new entities or relationships extracted.")
             else:
-                logger.info("New entities or relationships extracted.")
-                self.chunk_entity_relation_graph = new_kg
+                logger.info("atomic New entities or relationships extracted.")
+                self.atomic_entity_relation_graph = atomic_new_kg
+                
+            if triple_new_kg is None:
+                logger.info("triple No new entities or relationships extracted.")
+            else:
+                logger.info("triple New entities or relationships extracted.")
+                self.triple_entity_relation_graph = triple_new_kg
 
         except Exception as e:
-            logger.error("Failed to extract entities and relationships")
+            logger.error("atomic & triple Failed to extract entities and relationships")
+            raise e
+    
+    async def _process_entity_relation_graph_experiment1(self, chunk: dict[str, Any]) -> None:
+        try:
+            atomic_new_kg = await extract_entities_experiment1(
+                chunk,
+                atomic_knowledge_graph_inst=self.atomic_entity_relation_graph,
+                atomic_entity_vdb=self.atomic_entities_vdb,
+                atomic_relationships_vdb=self.atomic_relationships_vdb,
+                triple_knowledge_graph_inst=self.triple_entity_relation_graph,
+                triple_entity_vdb=self.triple_entities_vdb,
+                triple_relationships_vdb=self.triple_relationships_vdb,
+                # llm_response_cache=self.llm_response_cache,
+                global_config=asdict(self),
+            )
+            if atomic_new_kg is None:
+                logger.info("atomic No new entities or relationships extracted.")
+            else:
+                logger.info("atomic New entities or relationships extracted.")
+                self.atomic_entity_relation_graph = atomic_new_kg
+
+        except Exception as e:
+            logger.error("atomic Failed to extract entities")
+            raise e
+        
+    async def _process_entity_relation_graph_experiment2(self, chunk: dict[str, Any]) -> None:
+        try:
+            await extract_entities_experiment2(
+                chunk,
+                atomic_entity_vdb=self.atomic_entities_vdb,
+                triple_entity_vdb=self.triple_entities_vdb,
+                # llm_response_cache=self.llm_response_cache,
+                global_config=asdict(self),
+            )
+        except Exception as e:
+            logger.error("atomic Failed to extract entities")
             raise e
 
     async def _insert_done(self):
@@ -691,11 +843,29 @@ class PathCoRAG:
         for storage_inst in [
             self.full_docs,
             self.text_chunks,
-            self.llm_response_cache,
-            self.entities_vdb,
-            self.relationships_vdb,
+            # self.llm_response_cache,
+            self.atomic_entities_vdb,
+            self.atomic_relationships_vdb,
+            self.atomic_entity_relation_graph,
+            self.triple_entities_vdb,
+            self.triple_relationships_vdb,
+            self.triple_entity_relation_graph,
             self.chunks_vdb,
-            self.chunk_entity_relation_graph,
+        ]:
+            if storage_inst is None:
+                continue
+            tasks.append(cast(StorageNameSpace, storage_inst).index_done_callback())
+        await asyncio.gather(*tasks)
+        
+    async def _insert_done_2(self):
+        tasks = []
+        for storage_inst in [
+            self.full_docs,
+            self.text_chunks,
+            # self.llm_response_cache,
+            self.atomic_entities_vdb,
+            self.triple_entities_vdb,
+            self.chunks_vdb,
         ]:
             if storage_inst is None:
                 continue
@@ -845,72 +1015,20 @@ class PathCoRAG:
     async def aquery(
         self, query: str, prompt: str = "", param: QueryParam = QueryParam()
     ):
-        if param.mode in ["local", "global", "hybrid"]:
-            response = await kg_query(
-                query,
-                self.chunk_entity_relation_graph,
-                self.entities_vdb,
-                self.relationships_vdb,
-                self.text_chunks,
-                param,
-                asdict(self),
-                hashing_kv=self.llm_response_cache
-                if self.llm_response_cache
-                and hasattr(self.llm_response_cache, "global_config")
-                else self.key_string_value_json_storage_cls(
-                    namespace=make_namespace(
-                        self.namespace_prefix, NameSpace.KV_STORE_LLM_RESPONSE_CACHE
-                    ),
-                    global_config=asdict(self),
-                    embedding_func=self.embedding_func,
-                ),
-                prompt=prompt,
-            )
-        elif param.mode == "naive":
-            response = await naive_query(
-                query,
-                self.chunks_vdb,
-                self.text_chunks,
-                param,
-                asdict(self),
-                hashing_kv=self.llm_response_cache
-                if self.llm_response_cache
-                and hasattr(self.llm_response_cache, "global_config")
-                else self.key_string_value_json_storage_cls(
-                    namespace=make_namespace(
-                        self.namespace_prefix, NameSpace.KV_STORE_LLM_RESPONSE_CACHE
-                    ),
-                    global_config=asdict(self),
-                    embedding_func=self.embedding_func,
-                ),
-            )
-        elif param.mode == "mix":
-            response = await mix_kg_vector_query(
-                query,
-                self.chunk_entity_relation_graph,
-                self.entities_vdb,
-                self.relationships_vdb,
-                self.chunks_vdb,
-                self.text_chunks,
-                param,
-                asdict(self),
-                hashing_kv=self.llm_response_cache
-                if self.llm_response_cache
-                and hasattr(self.llm_response_cache, "global_config")
-                else self.key_string_value_json_storage_cls(
-                    namespace=make_namespace(
-                        self.namespace_prefix, NameSpace.KV_STORE_LLM_RESPONSE_CACHE
-                    ),
-                    global_config=asdict(self),
-                    embedding_func=self.embedding_func,
-                ),
-            )
-        elif param.mode in ["finall", "final_hop1", "final_hop2", "final_hop3", "final_query2", "final_query3", "final_query4", "final_node60", "final_node50", "final_node40", "final_node30", "final_node20", "final_node10", "final", "final_k1", "final_k2", "final_k3", "final_k4", "final_k5","final_path5","final_path10","final_path15", "final_path20", "final_path25", "final_path30", "final_path40", "final_path50", "final_random", "final_del"] :
+        
+        ##############
+        param = QueryParam(query=query)
+        ##############
+        if param.mode in ["ours"] :
             response = await ours_kg_query(
                 query,
-                self.chunk_entity_relation_graph,
-                self.entities_vdb,
-                self.relationships_vdb,
+                self.atomic_entity_relation_graph,
+                self.triple_entity_relation_graph,
+                self.atomic_entities_vdb,
+                self.atomic_relationships_vdb,
+                self.triple_entities_vdb,
+                self.triple_relationships_vdb,
+                self.text_atomics,
                 self.text_chunks,
                 param,
                 asdict(self),
@@ -926,6 +1044,52 @@ class PathCoRAG:
                 ),
                 prompt=prompt,
             )
+        elif param.mode in ["ours_experiment0"] :
+            response = await ours_kg_query_experiment0(
+                query,
+                self.chunks_vdb,
+                self.text_chunks,
+                param,
+                asdict(self),
+                hashing_kv=self.llm_response_cache,
+            )
+        elif param.mode in ["ours_experiment1"] :
+            response = await ours_kg_query_experiment1(
+                query, 
+                self.atomic_entity_relation_graph,
+                self.atomic_entities_vdb,
+                self.chunks_vdb,
+                self.text_triples,
+                self.text_atomics,
+                self.text_chunks,
+                param,
+                asdict(self),
+                hashing_kv=self.llm_response_cache,
+            )
+        elif param.mode in ["ours_experiment2"] :
+            response = await ours_kg_query_experiment2(
+                query,
+                self.atomic_entity_relation_graph,
+                self.triple_entity_relation_graph,
+                self.triple_entities_vdb,
+                self.text_atomics,
+                self.text_chunks,
+                param,
+                asdict(self),
+                hashing_kv=self.llm_response_cache,
+            )
+        elif param.mode in ["ours_experiment3"] :
+            response = await ours_kg_query_experiment3(
+                query,
+                self.atomic_entity_relation_graph,
+                self.triple_entity_relation_graph,
+                self.atomic_entities_vdb,
+                self.text_atomics,
+                self.text_chunks,
+                param,
+                asdict(self),
+                hashing_kv=self.llm_response_cache,
+            )    
         else:
             raise ValueError(f"Unknown mode {param.mode}")
         await self._query_done()

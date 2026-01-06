@@ -92,7 +92,118 @@ def batch_eval(query_file, result1_file, result2_file, output_file_path):
     )
     print(f"Batch {batch.id} has been created.")
 if __name__ == "__main__":
-    cls = "agriculture"
-    mode1 = "final_del"
-    mode2 = "final"
+    cls = "mix"
+    mode1 = "hybrid"
+    mode2 = "ours"
     batch_eval(f'../datasets/questions/{cls}_questions.txt', f'../PathCoRAG/{mode1}_{cls}_result.json', f'../PathCoRAG/{mode2}_{cls}_result.json', f'../PathCoRAG/eval_{mode1}_{mode2}_{cls}_result.json')
+
+# import re
+# import json
+# import jsonlines
+# import os
+# import random
+# from tqdm import tqdm
+# import google.generativeai as genai
+
+# # Gemini API 설정
+# genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+
+# def gemini_generate(system_prompt, user_prompt):
+#     model = genai.GenerativeModel("gemini-2.0-flash")
+#     convo = model.start_chat(history=[])
+#     full_prompt = f"{system_prompt.strip()}\n\n{user_prompt.strip()}"
+#     response = convo.send_message(full_prompt)
+#     return response.text
+
+# def batch_eval(query_file, result1_file, result2_file, output_file_path):
+#     with open(query_file, "r") as f:
+#         data = f.read()
+#     queries = re.findall(r"- Question \d+: (.+)", data)
+
+#     with open(result1_file, "r") as f:
+#         answers1 = json.load(f)
+#     answers1 = [i["result"] for i in answers1]
+
+#     with open(result2_file, "r") as f:
+#         answers2 = json.load(f)
+#     answers2 = [i["result"] for i in answers2]
+
+#     requests = []
+#     swap_indices = random.sample(range(len(queries)), len(queries) // 2)
+
+#     print(f"총 {len(queries)}개의 평가 쿼리를 처리합니다...")
+
+#     for i, (query, answer1, answer2) in enumerate(tqdm(zip(queries, answers1, answers2), total=len(queries))):
+#         swap = False
+#         if i in swap_indices:
+#             answer1, answer2 = answer2, answer1
+#             swap = True
+
+#         sys_prompt = """
+#         ---Role---
+#         You are an expert tasked with evaluating two answers to the same question based on three criteria: **Comprehensiveness**, **Diversity**, and **Empowerment**.
+#         """
+
+#         prompt = f"""
+#         You will evaluate two answers to the same question based on three criteria: **Comprehensiveness**, **Diversity**, and **Empowerment**.
+#         - **Comprehensiveness**: How much detail does the answer provide to cover all aspects and details of the question?
+#         - **Diversity**: How varied and rich is the answer in providing different perspectives and insights on the question?
+#         - **Empowerment**: How well does the answer help the reader understand and make informed judgments about the topic?
+#         For each criterion, choose the better answer (either Answer 1 or Answer 2) and explain why. Then, select an overall winner based on these three categories.
+
+#         Here is the question:
+#         {query}
+
+#         Here are the two answers:
+#         **Answer 1:**
+#         {answer1}
+#         **Answer 2:**
+#         {answer2}
+
+#         Evaluate both answers using the three criteria listed above and provide detailed explanations for each criterion.
+#         Output your evaluation in the following JSON format:
+#         {{
+#             "Comprehensiveness": {{
+#                 "Winner": "[Answer 1 or Answer 2]",
+#                 "Explanation": "[Provide explanation here]"
+#             }},
+#             "Diversity": {{
+#                 "Winner": "[Answer 1 or Answer 2]",
+#                 "Explanation": "[Provide explanation here]"
+#             }},
+#             "Empowerment": {{
+#                 "Winner": "[Answer 1 or Answer 2]",
+#                 "Explanation": "[Provide explanation here]"
+#             }},
+#             "Overall Winner": {{
+#                 "Winner": "[Answer 1 or Answer 2]",
+#                 "Explanation": "[Summarize why this answer is the overall winner based on the three criteria]"
+#             }}
+#         }}
+#         """
+
+#         response_text = gemini_generate(sys_prompt, prompt)
+#         request_data = {
+#             "query": query,
+#             "response": response_text,
+#             "swap": swap,
+#         }
+#         requests.append(request_data)
+
+#     with jsonlines.open(output_file_path, mode="w") as writer:
+#         for req in requests:
+#             writer.write(req)
+
+#     print(f"결과 저장 완료: {output_file_path}")
+
+# if __name__ == "__main__":
+#     cls = "mix"
+#     mode1 = "hybrid"
+#     mode2 = "final"
+#     batch_eval(
+#         f"../datasets/questions/{cls}_questions.txt",
+#         f"../PathCoRAG/{mode1}_{cls}_result.json",
+#         f"../PathCoRAG/{mode2}_{cls}_result.json",
+#         f"../PathCoRAG/eval_{mode1}_{mode2}_{cls}_result.jsonl",
+#     )
+

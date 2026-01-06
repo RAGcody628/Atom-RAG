@@ -22,6 +22,11 @@ class TextChunkSchema(TypedDict):
     content: str
     full_doc_id: str
     chunk_order_index: int
+    
+class TextAtomicSchema(TypedDict):
+    enity_name: str
+    source_id: str
+    atomic_id: str
 
 
 T = TypeVar("T")
@@ -39,6 +44,10 @@ class QueryParam:
     - "naive": Performs a basic search without advanced techniques.
     - "mix": Integrates knowledge graph and vector retrieval.
     """
+    Mode: str = "base"
+    
+    query_mode: str = "base"
+    
     addon_params: Dict[str, Any] = field(default_factory=dict)
     
     only_need_context: bool = False
@@ -55,6 +64,8 @@ class QueryParam:
 
     top_k: int = int(os.getenv("TOP_K", "60"))
     """Number of top items to retrieve. Represents entities in 'local' mode and relationships in 'global' mode."""
+    
+    top_mode: int = 7
 
     max_token_for_text_unit: int = 4000
     """Maximum number of tokens allowed for each retrieved text chunk."""
@@ -106,6 +117,9 @@ class BaseVectorStorage(StorageNameSpace):
         """Use 'content' field from value for embedding, use key as id.
         If embedding_func is None, use 'embedding' field from value
         """
+        raise NotImplementedError
+    
+    async def embed(self, texts: list[str]):
         raise NotImplementedError
 
 @dataclass

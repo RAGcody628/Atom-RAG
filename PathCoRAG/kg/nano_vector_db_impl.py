@@ -139,7 +139,7 @@ class NanoVectorDBStorage(BaseVectorStorage):
     async def query(self, query: str, top_k=5, filter_lambda=None):
         embedding = await self.embedding_func([query])
         embedding = embedding[0]
-        if filter_lambda is None:
+        if filter_lambda == None:
             logger.info(
                 f"Query: {query}, top_k: {top_k}, cosine: {self.cosine_better_than_threshold}"
             )
@@ -153,7 +153,7 @@ class NanoVectorDBStorage(BaseVectorStorage):
             results = self._client.query(
                 query=embedding,
                 top_k=top_k,
-                better_than_threshold=0,
+                better_than_threshold=self.cosine_better_than_threshold,
                 filter_lambda=filter_lambda
             )
             
@@ -167,6 +167,11 @@ class NanoVectorDBStorage(BaseVectorStorage):
             for dp in results
         ]
         return results
+
+    
+    async def embed(self, texts: list[str]):
+        """Wrapper for embedding_func to make code cleaner."""
+        return await self.embedding_func(texts)
 
     @property
     def client_storage(self):
